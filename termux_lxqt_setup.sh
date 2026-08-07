@@ -760,26 +760,29 @@ install_proot() {
     local rootfs="$PREFIX/var/lib/proot-distro/installed-rootfs/debian"
     local home="$rootfs/home/$username"
 
-    # Directory check alone isn't reliable: a prior interrupted/failed run
-    # can leave the container registered in proot-distro's own state even
-    # when the rootfs directory looks incomplete to us, which makes a plain
-    # `proot-distro install debian` fail with "container already exists".
-    # `proot-distro list` is the authoritative source, so check that first.
-    if [[ -d "$rootfs" ]] || proot-distro list 2>/dev/null | grep -qiE '\bdebian\b'; then
+    # Neither a directory check nor `proot-distro list` reliably tells us
+    # whether debian is already installed: `list` always shows every
+    # *supported* distro (installed or not), and the rootfs path we assume
+    # can disagree with what proot-distro is actually tracking internally.
+    # So instead of guessing beforehand, just attempt the install and let
+    # proot-distro's own response be the source of truth — if it fails
+    # specifically because the container already exists, that's success,
+    # not an error.
+    local install_log="$TEMP_DIR/proot_install.log"
+    set +e
+    proot-distro install debian 2>&1 | tee "$install_log"
+    local install_status=${PIPESTATUS[0]}
+    set -e
+
+    if [[ $install_status -eq 0 ]]; then
+        print_status ok "Debian proot installed"
+    elif grep -qi "already exists" "$install_log"; then
         print_status ok "Debian proot already installed"
     else
-        print_status info "Installing Debian proot..."
-        if ! proot-distro install debian; then
-            # If it turns out to exist after all (race with the registry,
-            # or an error message rather than a real failure), keep going
-            # instead of aborting the whole install.
-            if [[ -d "$rootfs" ]] || proot-distro list 2>/dev/null | grep -qiE '\bdebian\b'; then
-                print_status warn "proot-distro reported an issue but the container is present — continuing"
-            else
-                die "Failed to install Debian proot — see $LOG_FILE"
-            fi
-        fi
+        die "Failed to install Debian proot — see $LOG_FILE"
     fi
+
+    [[ -d "$rootfs" ]] || die "proot-distro reports debian is installed, but expected rootfs path is missing: $rootfs — check $LOG_FILE"
 
     pd_run apt-get update -qq
     # Only upgrade if there's actually something pending — on a freshly
