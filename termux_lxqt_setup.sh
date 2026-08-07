@@ -1,5 +1,13 @@
 #!/bin/bash
 # Termux LXQt Native Desktop Installer
+#
+# Install:
+#   curl -fsSL https://raw.githubusercontent.com/ThanapatFungpharit/termux-lxqt/refs/heads/main/termux_lxqt_setup.sh | bash
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "This installer needs bash, not sh. Run it as: curl -fsSL <url> | bash" >&2
+    exit 1
+fi
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -214,7 +222,7 @@ pd_run_as() {
 setup_base() {
     print_step "Repository & Storage"
 
-    termux-change-repo || die "Failed to change repository"
+    termux-change-repo </dev/tty || die "Failed to change repository"
 
     if [[ -d ~/storage ]]; then
         print_status ok "Storage access already granted"
@@ -1030,7 +1038,7 @@ BASHRC
     fi
 
     echo -e "${YELLOW}Set a password for SSH login (Debian user '$username'):${NC}"
-    pd_run_as "$username" passwd || print_status warn "No password set — run 'passwd' later to enable SSH login"
+    pd_run_as "$username" passwd </dev/tty || print_status warn "No password set — run 'passwd' later to enable SSH login"
 
     SSH_LOGIN="$username@$(get_local_ip) -p 8022"
     print_status ok "Connect with: ssh $SSH_LOGIN"
@@ -1062,7 +1070,7 @@ main() {
     echo "  • Orchis-Dark theme, Papirus icons, Bibata cursors, Inter/Cascadia fonts"
     echo ""
     echo -e "${YELLOW}Press Enter to continue, or Ctrl+C to cancel.${NC}"
-    read -r
+    read -r </dev/tty
 
     echo -e "\n${YELLOW}Optional components${NC} (press Enter to accept the default):"
     echo -n "  Install SSH server for remote access (port 8022)? [Y/n] " >/dev/tty
