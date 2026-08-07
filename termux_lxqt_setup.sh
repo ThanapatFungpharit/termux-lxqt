@@ -760,29 +760,19 @@ install_proot() {
     local rootfs="$PREFIX/var/lib/proot-distro/installed-rootfs/debian"
     local home="$rootfs/home/$username"
 
-    # Neither a directory check nor `proot-distro list` reliably tells us
-    # whether debian is already installed: `list` always shows every
-    # *supported* distro (installed or not), and the rootfs path we assume
-    # can disagree with what proot-distro is actually tracking internally.
-    # So instead of guessing beforehand, just attempt the install and let
-    # proot-distro's own response be the source of truth — if it fails
-    # specifically because the container already exists, that's success,
-    # not an error.
-    local install_log="$TEMP_DIR/proot_install.log"
-    set +e
-    proot-distro install debian 2>&1 | tee "$install_log"
-    local install_status=${PIPESTATUS[0]}
-    set -e
-
-    if [[ $install_status -eq 0 ]]; then
-        print_status ok "Debian proot installed"
-    elif grep -qi "already exists" "$install_log"; then
+    # A real login is the only thing that actually proves the container is
+    # usable — directory paths and `proot-distro list` output are both
+    # unreliable proxies for this. Try logging in; only install if that
+    # genuinely fails.
+    if proot-distro login debian --shared-tmp -- true >/dev/null 2>&1; then
         print_status ok "Debian proot already installed"
     else
-        die "Failed to install Debian proot — see $LOG_FILE"
+        print_status info "Installing Debian proot..."
+        proot-distro install debian || die "Failed to install Debian proot — see $LOG_FILE"
+        proot-distro login debian --shared-tmp -- true >/dev/null 2>&1 \
+            || die "Debian proot installed but login still fails — see $LOG_FILE"
+        print_status ok "Debian proot installed"
     fi
-
-    [[ -d "$rootfs" ]] || die "proot-distro reports debian is installed, but expected rootfs path is missing: $rootfs — check $LOG_FILE"
 
     pd_run apt-get update -qq
     # Only upgrade if there's actually something pending — on a freshly
