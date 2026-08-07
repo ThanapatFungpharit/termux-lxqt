@@ -311,7 +311,7 @@ install_themes_and_fonts() {
         download_if_missing \
             "https://raw.githubusercontent.com/vinceliuice/Orchis-theme/master/release/Orchis.tar.xz" \
             "$td/orchis.tar.xz"
-        mkdir -p "$td/orchis"
+        mkdir -p "$td/orchis" "$PREFIX/share/themes"
         tar -xf "$td/orchis.tar.xz" -C "$td/orchis/"
         mv "$td/orchis/Orchis-Dark" "$PREFIX/share/themes/"
         print_status ok "Orchis-Dark theme installed"
@@ -542,6 +542,7 @@ EOF
 
 write_desktop_entries() {
     print_step "Desktop Entries"
+    mkdir -p "$PREFIX/share/applications"
 
     # pcmanfm-qt and qterminal ship their own Applications-menu entries, so
     # unlike XFCE's exo-open launchers we don't need to hand-roll those here.
