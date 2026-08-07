@@ -805,15 +805,22 @@ install_proot() {
     # Belt-and-braces: if any package's postinst/trigger failed partway
     # through (e.g. the udisks2 USB-scan noise above), this finishes
     # configuring whatever was left half-installed instead of silently
-    # leaving files like /etc/sudoers missing.
+    # leaving packages like sudo un-configured.
     pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
 
-    # sudo's postinst is what creates /etc/sudoers. If it's still missing
-    # after the above, force a reinstall rather than dying on a blind chmod.
-    if [[ ! -f "$rootfs/etc/sudoers" ]]; then
-        print_status warn "/etc/sudoers missing after install — reinstalling sudo"
-        pd_run env RUNLEVEL=1 apt-get install -y --reinstall sudo \
-            || die "Failed to install sudo (sudoers file still missing) — see $LOG_FILE"
+    # Check the actual sudo binary, not just /etc/sudoers — that file can
+    # exist on its own (e.g. left over from an earlier reset/partial run)
+    # even when the sudo package itself never got installed. --reinstall
+    # is also the wrong tool here since it requires apt to think the
+    # package is already installed; a plain install is what actually pulls
+    # it in if it's missing.
+    if ! pd_run bash -c 'command -v sudo' >/dev/null 2>&1; then
+        print_status warn "sudo not found in proot — installing it"
+        pd_run env RUNLEVEL=1 DEBIAN_FRONTEND=noninteractive apt-get install -y sudo \
+            || die "Failed to install sudo — see $LOG_FILE"
+        pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
+        pd_run bash -c 'command -v sudo' >/dev/null 2>&1 \
+            || die "sudo package installed but binary still not found — see $LOG_FILE"
     fi
 
     if [[ ! -d "$home" ]]; then
@@ -826,7 +833,10 @@ install_proot() {
     fi
 
     local sudoers="$rootfs/etc/sudoers"
-    [[ -f "$sudoers" ]] || die "sudo package not properly installed ($sudoers missing) — check $LOG_FILE"
+    if [[ ! -f "$sudoers" ]]; then
+        pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
+    fi
+    [[ -f "$sudoers" ]] || die "sudo package installed but $sudoers is missing — check $LOG_FILE"
     if ! grep -q "^$username " "$sudoers" 2>/dev/null; then
         chmod u+rw "$sudoers"
         echo "$username ALL=(ALL) NOPASSWD:ALL" >> "$sudoers"
