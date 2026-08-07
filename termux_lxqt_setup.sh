@@ -3,7 +3,6 @@
 #
 # Install:
 #   curl -fsSL https://raw.githubusercontent.com/ThanapatFungpharit/termux-lxqt/refs/heads/main/termux_lxqt_setup.sh | bash
-
 if [ -z "${BASH_VERSION:-}" ]; then
     echo "This installer needs bash, not sh. Run it as: curl -fsSL <url> | bash" >&2
     exit 1
@@ -17,8 +16,8 @@ readonly LOG_FILE="$HOME/termux_setup.log"
 readonly TEMP_DIR=$(mktemp -d)
 readonly SCRIPT_START=$(date +%s)
 
-# Toggled by the optional-components prompt in main()
-INSTALL_SSH=true
+# SSH is always installed (no longer optional)
+readonly INSTALL_SSH=true
 
 # Only self-delete if $0 is a real file (not `curl | bash`)
 if [[ -f "${0:-}" ]]; then
@@ -328,6 +327,7 @@ install_themes_and_fonts() {
         download_if_missing \
             "https://github.com/ful1e5/Bibata_Cursor/releases/download/v2.0.7/Bibata-Modern-Classic.tar.xz" \
             "$td/bibata.tar.xz"
+        mkdir -p "$PREFIX/share/icons"
         tar -xf "$td/bibata.tar.xz" -C "$PREFIX/share/icons/"
         print_status ok "Bibata-Modern-Classic cursor theme installed"
     else
@@ -1072,11 +1072,6 @@ main() {
     echo -e "${YELLOW}Press Enter to continue, or Ctrl+C to cancel.${NC}"
     read -r </dev/tty
 
-    echo -e "\n${YELLOW}Optional components${NC} (press Enter to accept the default):"
-    echo -n "  Install SSH server for remote access (port 8022)? [Y/n] " >/dev/tty
-    read -r reply </dev/tty
-    [[ "$reply" =~ ^[Nn] ]] && INSTALL_SSH=false
-
     local username=""
     while true; do
         echo -n "Enter username for the Debian proot environment (this is also where LXQt runs): " >/dev/tty
@@ -1107,11 +1102,7 @@ main() {
     # own git rather than a native Termux one.
     install_utilities "$username"
 
-    if [[ "$INSTALL_SSH" == true ]]; then
-        install_ssh "$username"
-    else
-        skip_step "SSH Server"
-    fi
+    install_ssh "$username"
 
     # Report duration of the final step, matching the pattern print_step uses
     # for every step before it
@@ -1130,11 +1121,9 @@ main() {
     echo -e "  ${YELLOW}zrunhud${NC}    — Same as zrun + FPS overlay"
     echo -e "  ${CYAN}(all shell config — tmux, uv, Oh My Bash, ls/cat aliases — lives inside the proot; Termux itself has none)${NC}"
     echo ""
-    if [[ "$INSTALL_SSH" == true ]]; then
-        echo -e "${CYAN}SSH:${NC} ssh ${SSH_LOGIN:-<user>@<device-ip> -p 8022}"
-        echo -e "  ${YELLOW}start-sshd${NC} / ${YELLOW}stop-sshd${NC} — toggle the SSH server (run these from inside the proot)"
-        echo ""
-    fi
+    echo -e "${CYAN}SSH:${NC} ssh ${SSH_LOGIN:-<user>@<device-ip> -p 8022}"
+    echo -e "  ${YELLOW}start-sshd${NC} / ${YELLOW}stop-sshd${NC} — toggle the SSH server (run these from inside the proot)"
+    echo ""
     echo -e "${CYAN}Firefox tip:${NC} Disable hardware acceleration in Firefox settings"
     echo -e "  (Settings → search 'performance' → uncheck Use hardware acceleration)\n"
     echo -e "${YELLOW}Run 'start' to launch your desktop.${NC}\n"
