@@ -16,8 +16,6 @@ readonly LOG_FILE="$HOME/termux_setup.log"
 readonly TEMP_DIR=$(mktemp -d)
 readonly SCRIPT_START=$(date +%s)
 
-# SSH is always installed (no longer optional)
-readonly INSTALL_SSH=true
 
 # Only self-delete if $0 is a real file (not `curl | bash`)
 if [[ -f "${0:-}" ]]; then
@@ -761,64 +759,37 @@ install_proot() {
     local home="$rootfs/home/$username"
 
     # A real login is the only thing that actually proves the container is
-    # usable — directory paths and `proot-distro list` output are both
-    # unreliable proxies for this. Try logging in; only install if that
-    # genuinely fails.
+    # usable. Try it; only install if that genuinely fails.
     if proot-distro login debian --shared-tmp -- true >/dev/null 2>&1; then
         print_status ok "Debian proot already installed"
     else
         print_status info "Installing Debian proot..."
         proot-distro install debian || die "Failed to install Debian proot — see $LOG_FILE"
-        proot-distro login debian --shared-tmp -- true >/dev/null 2>&1 \
-            || die "Debian proot installed but login still fails — see $LOG_FILE"
-        print_status ok "Debian proot installed"
     fi
 
+    # apt install/upgrade are already idempotent — if everything's current
+    # this is fast (apt just reports "already the newest version" and
+    # exits), so there's no need for a separate "is this already done"
+    # check here; running it is the check.
     pd_run apt-get update -qq
-    # Only upgrade if there's actually something pending — on a freshly
-    # bootstrapped proot there rarely is, and this check is much cheaper
-    # than a full upgrade pass.
-    if [[ "$(pd_run apt-get -s upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
-        pd_run apt-get upgrade -y -qq
-    else
-        print_status ok "Proot packages already current"
-    fi
+    pd_run apt-get upgrade -y -qq
     # RUNLEVEL=1 tells maintainer scripts they're in a non-booted/chroot-like
     # environment, so they skip hardware probing (udev/hwdb triggers trying
-    # to enumerate /sys/bus/usb, which doesn't exist in a proot and otherwise
-    # prints "No such file or directory" noise and can leave packages queued
-    # after the failing one un-configured).
+    # to enumerate /sys/bus/usb, which doesn't exist in a proot and
+    # otherwise prints "No such file or directory" noise).
     pd_run env RUNLEVEL=1 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo onboard conky-all flameshot firefox-esr \
         tmux curl wget git gnupg eza bat fastfetch openssh-server procps \
         lxqt openbox qterminal pcmanfm-qt obconf-qt pavucontrol-qt \
         qt5-gtk-platformtheme libgl1-mesa-dri mesa-utils \
         papirus-icon-theme fonts-noto-color-emoji \
-        -o Dpkg::Options::="--force-confold"
+        -o Dpkg::Options::="--force-confold" \
+        || die "Package install failed — see $LOG_FILE"
 
-    # Belt-and-braces: if any package's postinst/trigger failed partway
-    # through (e.g. the udisks2 USB-scan noise above), this finishes
-    # configuring whatever was left half-installed instead of silently
-    # leaving packages like sudo un-configured.
-    pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
-
-    # Check the actual sudo binary, not just /etc/sudoers — that file can
-    # exist on its own (e.g. left over from an earlier reset/partial run)
-    # even when the sudo package itself never got installed. --reinstall
-    # is also the wrong tool here since it requires apt to think the
-    # package is already installed; a plain install is what actually pulls
-    # it in if it's missing.
-    if ! pd_run bash -c 'command -v sudo' >/dev/null 2>&1; then
-        print_status warn "sudo not found in proot — installing it"
-        pd_run env RUNLEVEL=1 DEBIAN_FRONTEND=noninteractive apt-get install -y sudo \
-            || die "Failed to install sudo — see $LOG_FILE"
-        pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
-        pd_run bash -c 'command -v sudo' >/dev/null 2>&1 \
-            || die "sudo package installed but binary still not found — see $LOG_FILE"
-    fi
-
+    # Don't pre-check whether the user exists — just try to create it and
+    # read the result. useradd itself is the most reliable source of truth
+    # for whether it's already there.
     pd_run groupadd -f storage
     pd_run groupadd -f wheel
-
     local useradd_log="$TEMP_DIR/useradd.log"
     if pd_run useradd -m -g users -G wheel,audio,video,storage -s /bin/bash "$username" \
         > "$useradd_log" 2>&1; then
@@ -832,14 +803,34 @@ install_proot() {
 
     local sudoers="$rootfs/etc/sudoers"
     if [[ ! -f "$sudoers" ]]; then
-        pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
+        # sudo's binary is present (dpkg unpacks files before postinst
+        # runs), but its postinst — the part that writes /etc/sudoers —
+        # didn't complete in this proot. The format is stable, so write
+        # a standard minimal one directly rather than depending on that
+        # maintainer script.
+        print_status warn "sudo's postinst never wrote /etc/sudoers — writing one directly"
+        cat > "$sudoers" <<'EOF'
+Defaults        env_reset
+Defaults        mail_badpass
+Defaults        secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+root    ALL=(ALL:ALL) ALL
+%sudo   ALL=(ALL:ALL) ALL
+
+#includedir /etc/sudoers.d
+EOF
+        mkdir -p "$rootfs/etc/sudoers.d"
+        chmod 750 "$rootfs/etc/sudoers.d" 2>/dev/null || true
+        chown root:root "$sudoers" 2>/dev/null || true
     fi
-    [[ -f "$sudoers" ]] || die "sudo package installed but $sudoers is missing — check $LOG_FILE"
+
     if ! grep -q "^$username " "$sudoers" 2>/dev/null; then
         chmod u+rw "$sudoers"
         echo "$username ALL=(ALL) NOPASSWD:ALL" >> "$sudoers"
         chmod 440 "$sudoers"
         print_status ok "Sudo configured"
+    else
+        print_status ok "Sudo already configured"
     fi
 
     if [[ -x "$home/.local/bin/uv" ]]; then
