@@ -352,7 +352,9 @@ install_themes_and_fonts() {
         download_if_missing \
             "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.0.2/Meslo.zip" \
             "$td/meslo.zip"
-        unzip -q "$td/meslo.zip" "*.ttf" -d "$HOME/.fonts/"
+        unzip -q "$td/meslo.zip" -d "$td/meslo/"
+        find "$td/meslo" -iname "*.ttf" -exec mv {} "$HOME/.fonts/" \;
+        [[ -f "$HOME/.fonts/MesloLGSNerdFont-Regular.ttf" ]] || die "MesloLGSNerdFont-Regular.ttf not found in downloaded archive"
         print_status ok "Meslo Nerd Font installed"
     else
         print_status ok "Meslo Nerd Font already installed"
@@ -367,8 +369,9 @@ install_themes_and_fonts() {
         download_if_missing \
             "https://github.com/rsms/inter/releases/download/v4.0/Inter-4.0.zip" \
             "$td/inter.zip"
-        unzip -q "$td/inter.zip" "Variable/InterVariable*.ttf" -d "$td/inter/"
-        find "$td/inter" -name "InterVariable*.ttf" -exec mv {} "$HOME/.fonts/" \;
+        unzip -q "$td/inter.zip" -d "$td/inter/"
+        find "$td/inter" -iname "InterVariable*.ttf" -exec mv {} "$HOME/.fonts/" \;
+        [[ -f "$HOME/.fonts/InterVariable.ttf" ]] || die "InterVariable.ttf not found in downloaded archive"
         print_status ok "Inter UI font installed"
     else
         print_status ok "Inter UI font already installed"
