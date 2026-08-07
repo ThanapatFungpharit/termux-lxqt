@@ -818,12 +818,16 @@ install_proot() {
 
     pd_run groupadd -f storage
     pd_run groupadd -f wheel
-    if pd_run id "$username" >/dev/null 2>&1; then
+
+    local useradd_log="$TEMP_DIR/useradd.log"
+    if pd_run useradd -m -g users -G wheel,audio,video,storage -s /bin/bash "$username" \
+        > "$useradd_log" 2>&1; then
+        print_status ok "Proot user '$username' created"
+    elif grep -qi "already exists" "$useradd_log"; then
         print_status ok "Proot user '$username' already exists"
     else
-        pd_run useradd -m -g users -G wheel,audio,video,storage -s /bin/bash "$username" \
-            || die "Failed to create proot user '$username' — see $LOG_FILE"
-        print_status ok "Proot user '$username' created"
+        cat "$useradd_log" >> "$LOG_FILE"
+        die "Failed to create proot user '$username' — see $LOG_FILE"
     fi
 
     local sudoers="$rootfs/etc/sudoers"
