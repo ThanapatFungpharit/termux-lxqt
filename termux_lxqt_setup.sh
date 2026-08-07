@@ -230,9 +230,15 @@ setup_base() {
         termux-setup-storage || die "Storage setup failed. Clear Termux data in App Info and retry."
     fi
 
-    print_status info "Upgrading existing packages..."
-    pkg upgrade -y -o Dpkg::Options::="--force-confold" \
-        || die "Package upgrade failed"
+    local upgradable
+    upgradable=$(apt list --upgradable 2>/dev/null | grep -c upgradable || true)
+    if [[ "$upgradable" -gt 0 ]]; then
+        print_status info "Upgrading $upgradable existing package(s)..."
+        pkg upgrade -y -o Dpkg::Options::="--force-confold" \
+            || die "Package upgrade failed"
+    else
+        print_status ok "No package upgrades pending"
+    fi
 
     local props="$HOME/.termux/termux.properties"
     if [[ -f "$props" ]]; then
@@ -294,11 +300,19 @@ create_directories() {
 install_themes_and_fonts() {
     print_step "Themes, Icons & Fonts"
     local td="$TEMP_DIR"
+    local pids=()
+
+    # All these downloads are independent of each other, so they're kicked
+    # off in the background and waited on together instead of one-at-a-time.
+    # This turns ~8 sequential network round-trips into roughly the time of
+    # the single slowest one. Extraction/install of each archive still
+    # happens after its own download finishes, in the "wait" section below.
 
     if [[ ! -f "$PREFIX/share/backgrounds/termux-desktop/dark_waves.png" ]]; then
-        download_if_missing \
+        ( download_if_missing \
             "https://raw.githubusercontent.com/phoenixbyrd/Termux_XFCE/main/dark_waves.png" \
-            "$PREFIX/share/backgrounds/termux-desktop/dark_waves.png"
+            "$PREFIX/share/backgrounds/termux-desktop/dark_waves.png" ) &
+        pids+=($!)
     else
         print_status ok "Wallpaper already present"
     fi
@@ -307,10 +321,68 @@ install_themes_and_fonts() {
     # and built specifically for GNOME-style desktops, unlike the
     # macOS-styled WhiteSur theme this used to ship with.
     if [[ ! -d "$PREFIX/share/themes/Orchis-Dark" ]]; then
-        print_status info "Installing Orchis-Dark theme..."
-        download_if_missing \
+        ( download_if_missing \
             "https://raw.githubusercontent.com/vinceliuice/Orchis-theme/master/release/Orchis.tar.xz" \
-            "$td/orchis.tar.xz"
+            "$td/orchis.tar.xz" ) &
+        pids+=($!)
+    fi
+
+    # Bibata is the compact, minimal cursor set most modern GNOME/KDE
+    # setups ship with by default — cleaner and less "Windows-y" than
+    # a Fluent-style cursor set.
+    if [[ ! -d "$PREFIX/share/icons/Bibata-Modern-Classic" ]]; then
+        ( download_if_missing \
+            "https://github.com/ful1e5/Bibata_Cursor/releases/download/v2.0.7/Bibata-Modern-Classic.tar.xz" \
+            "$td/bibata.tar.xz" ) &
+        pids+=($!)
+    fi
+
+    if [[ ! -f "$HOME/.fonts/CascadiaMonoPL-Regular.otf" ]]; then
+        ( download_if_missing \
+            "https://github.com/microsoft/cascadia-code/releases/download/v2111.01/CascadiaCode-2111.01.zip" \
+            "$td/cascadia.zip" ) &
+        pids+=($!)
+    fi
+
+    if [[ ! -f "$HOME/.fonts/MesloLGSNerdFont-Regular.ttf" ]]; then
+        ( download_if_missing \
+            "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.0.2/Meslo.zip" \
+            "$td/meslo.zip" ) &
+        pids+=($!)
+    fi
+
+    # Inter is the clean, neutral UI sans-serif most modern GNOME/KDE
+    # distros use for their interface font. Cascadia stays reserved for
+    # the terminal only — it was doing double duty as the UI font before,
+    # which is part of what made things look less "stock modern desktop."
+    if [[ ! -f "$HOME/.fonts/InterVariable.ttf" ]]; then
+        ( download_if_missing \
+            "https://github.com/rsms/inter/releases/download/v4.0/Inter-4.0.zip" \
+            "$td/inter.zip" ) &
+        pids+=($!)
+    fi
+
+    ( download_if_missing \
+        "https://github.com/phoenixbyrd/Termux_XFCE/raw/main/NotoColorEmoji-Regular.ttf" \
+        "$HOME/.fonts/NotoColorEmoji-Regular.ttf" ) &
+    pids+=($!)
+
+    ( download_if_missing \
+        "https://github.com/phoenixbyrd/Termux_XFCE/raw/main/font.ttf" \
+        "$HOME/.termux/font.ttf" ) &
+    pids+=($!)
+
+    print_status info "Downloading themes and fonts in parallel (${#pids[@]} jobs)..."
+    local job_failed=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || job_failed=1
+    done
+    [[ $job_failed -eq 0 ]] || die "One or more theme/font downloads failed — see $LOG_FILE"
+    print_status ok "Downloads complete"
+
+    # Extraction/install steps run after their download has landed. Each
+    # is still idempotent (skipped if already installed).
+    if [[ ! -d "$PREFIX/share/themes/Orchis-Dark" ]]; then
         mkdir -p "$td/orchis" "$PREFIX/share/themes"
         tar -xf "$td/orchis.tar.xz" -C "$td/orchis/"
         mv "$td/orchis/Orchis-Dark" "$PREFIX/share/themes/"
@@ -319,14 +391,7 @@ install_themes_and_fonts() {
         print_status ok "Orchis-Dark already installed"
     fi
 
-    # Bibata is the compact, minimal cursor set most modern GNOME/KDE
-    # setups ship with by default — cleaner and less "Windows-y" than
-    # a Fluent-style cursor set.
     if [[ ! -d "$PREFIX/share/icons/Bibata-Modern-Classic" ]]; then
-        print_status info "Installing Bibata-Modern-Classic cursor theme..."
-        download_if_missing \
-            "https://github.com/ful1e5/Bibata_Cursor/releases/download/v2.0.7/Bibata-Modern-Classic.tar.xz" \
-            "$td/bibata.tar.xz"
         mkdir -p "$PREFIX/share/icons"
         tar -xf "$td/bibata.tar.xz" -C "$PREFIX/share/icons/"
         print_status ok "Bibata-Modern-Classic cursor theme installed"
@@ -335,10 +400,6 @@ install_themes_and_fonts() {
     fi
 
     if [[ ! -f "$HOME/.fonts/CascadiaMonoPL-Regular.otf" ]]; then
-        print_status info "Installing Cascadia Code fonts (terminal)..."
-        download_if_missing \
-            "https://github.com/microsoft/cascadia-code/releases/download/v2111.01/CascadiaCode-2111.01.zip" \
-            "$td/cascadia.zip"
         unzip -q "$td/cascadia.zip" -d "$td/cascadia/"
         find "$td/cascadia/otf/static" -name "*.otf" -exec mv {} "$HOME/.fonts/" \;
         find "$td/cascadia/ttf"        -name "*.ttf" -exec mv {} "$HOME/.fonts/" \;
@@ -348,10 +409,6 @@ install_themes_and_fonts() {
     fi
 
     if [[ ! -f "$HOME/.fonts/MesloLGSNerdFont-Regular.ttf" ]]; then
-        print_status info "Installing Meslo Nerd Font..."
-        download_if_missing \
-            "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.0.2/Meslo.zip" \
-            "$td/meslo.zip"
         unzip -q "$td/meslo.zip" -d "$td/meslo/"
         find "$td/meslo" -iname "*.ttf" -exec mv {} "$HOME/.fonts/" \;
         [[ -f "$HOME/.fonts/MesloLGSNerdFont-Regular.ttf" ]] || die "MesloLGSNerdFont-Regular.ttf not found in downloaded archive"
@@ -360,15 +417,7 @@ install_themes_and_fonts() {
         print_status ok "Meslo Nerd Font already installed"
     fi
 
-    # Inter is the clean, neutral UI sans-serif most modern GNOME/KDE
-    # distros use for their interface font. Cascadia stays reserved for
-    # the terminal only — it was doing double duty as the UI font before,
-    # which is part of what made things look less "stock modern desktop."
     if [[ ! -f "$HOME/.fonts/InterVariable.ttf" ]]; then
-        print_status info "Installing Inter UI font..."
-        download_if_missing \
-            "https://github.com/rsms/inter/releases/download/v4.0/Inter-4.0.zip" \
-            "$td/inter.zip"
         unzip -q "$td/inter.zip" -d "$td/inter/"
         find "$td/inter" -iname "InterVariable*.ttf" -exec mv {} "$HOME/.fonts/" \;
         [[ -f "$HOME/.fonts/InterVariable.ttf" ]] || die "InterVariable.ttf not found in downloaded archive"
@@ -376,22 +425,9 @@ install_themes_and_fonts() {
     else
         print_status ok "Inter UI font already installed"
     fi
-
-    download_if_missing \
-        "https://github.com/phoenixbyrd/Termux_XFCE/raw/main/NotoColorEmoji-Regular.ttf" \
-        "$HOME/.fonts/NotoColorEmoji-Regular.ttf"
-
-    download_if_missing \
-        "https://github.com/phoenixbyrd/Termux_XFCE/raw/main/font.ttf" \
-        "$HOME/.termux/font.ttf"
 }
 
 write_openbox_theme() {
-    # A hand-rolled, flat/borderless Openbox window theme: no gradients,
-    # no bevels, 1px hairline borders, square corners — the "no chrome"
-    # look modern GNOME/KDE window decorations go for, tuned to sit next
-    # to Orchis-Dark's blue accent instead of clashing with whatever
-    # theme Openbox falls back to out of the box.
     local theme_dir="$PREFIX/share/themes/Modern-Flat-Dark/openbox-3"
     mkdir -p "$theme_dir"
     cat > "$theme_dir/themerc" <<'EOF'
@@ -442,9 +478,6 @@ write_lxqt_config() {
 
     write_openbox_theme
 
-    # GTK apps (and Qt apps, via the qt5-qtbase-gtk-platformtheme bridge)
-    # both read this, so it's the one place that drives the whole desktop's
-    # look — theme, icons, cursor, and font all in sync automatically.
     cat > "$HOME/.config/gtk-3.0/settings.ini" <<'EOF'
 [Settings]
 gtk-theme-name=Orchis-Dark
@@ -481,8 +514,6 @@ showTabBarShortcut=false
 ShowMenu=false
 EOF
 
-    # pcmanfm-qt is the file manager AND the desktop/wallpaper renderer
-    # in LXQt (there's no separate xfdesktop equivalent)
     cat > "$HOME/.config/pcmanfm-qt/lxqt/settings.conf" <<'EOF'
 [System]
 Iconsize=32
@@ -505,8 +536,6 @@ showTrashIcon=false
 showHomeIcon=false
 EOF
 
-    # Point LXQt's session Openbox at the flat theme above and trim window
-    # margins so borders read as hairlines instead of chunky default frames.
     cat > "$HOME/.config/openbox/lxqt-rc.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_config xmlns="http://openbox.org/3.4/rc">
@@ -544,12 +573,6 @@ write_desktop_entries() {
     print_step "Desktop Entries"
     mkdir -p "$PREFIX/share/applications"
 
-    # pcmanfm-qt and qterminal ship their own Applications-menu entries, so
-    # unlike XFCE's exo-open launchers we don't need to hand-roll those here.
-    # Firefox still needs one. This file lives under $PREFIX (bind-mounted
-    # into the proot at the same path, and on XDG_DATA_DIRS there — see
-    # the `start` script), and no longer needs a zrun wrapper: the whole
-    # LXQt session already runs inside the proot where firefox-esr lives.
     cat > "$PREFIX/share/applications/firefox.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
@@ -580,14 +603,6 @@ write_scripts_and_aliases() {
     print_step "Scripts"
     local username=$1
 
-    # Deliberately no Termux-side shell config (bash.bashrc exports/aliases)
-    # here. Termux is infrastructure only — the X server/GPU relay/audio
-    # bridge underneath the desktop — not somewhere to work from. All
-    # interactive shell config (env vars, ls/cat aliases, Oh My Bash) lives
-    # exclusively in the Debian proot's own bashrc (see install_proot). The
-    # scripts below (start, kill_termux_x11, prun/zrun/zrunhud) are just the
-    # entry points Termux needs to boot the proot/session — not shell config.
-
     cat > "$HOME/.config/gtk-3.0/bookmarks" <<EOF
 file:///data/data/com.termux/files/home/Downloads
 file:///data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/debian/home/$username Debian Home
@@ -598,8 +613,6 @@ EOF
 #!/bin/bash
 pkill -f "termux.x11" 2>/dev/null || true
 
-# Held for the life of this script so Android doesn't OOM-kill Termux;
-# released automatically when the process exits.
 termux-wake-lock 2>/dev/null || true
 
 MANUFACTURER=$(getprop ro.product.manufacturer | tr '[:upper:]' '[:lower:]')
@@ -617,7 +630,6 @@ else
 fi
 
 export PULSE_SERVER=127.0.0.1
-# dbus needs XDG_RUNTIME_DIR at 0700; $TMPDIR is 1777, so use a subdir
 export XDG_RUNTIME_DIR="${TMPDIR}/runtime-$(id -u)"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
@@ -653,19 +665,6 @@ dbus-daemon --session --address=unix:path="$PREFIX/var/run/dbus-session" &
 
 xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
 
-# LXQt itself is installed inside the Debian proot (better filesystem/package
-# compatibility than Termux's own userland) and is launched there. Everything
-# it needs from the host is forwarded in:
-#   - PREFIX/HOME bind-mounted at identical paths, and HOME overridden to
-#     Termux's $HOME, so LXQt reads the exact config this script wrote
-#     (~/.config/lxqt, ~/.Xresources, ~/.fonts, ~/.config/autostart, ...)
-#     without any of it needing to be duplicated into the proot.
-#   - /system bound read-only so kill_termux_x11 (which calls Android's
-#     `am`) still works from inside the proot.
-#   - DBUS_SESSION_BUS_ADDRESS points at the bus started above, so LXQt
-#     joins Termux's session bus instead of spawning a second one.
-#   - XDG_DATA_DIRS includes $PREFIX/share so the app menu picks up the
-#     firefox/kill_termux_x11/app-installer/cp2menu entries written there.
 PROOT_USER=$(basename "$PREFIX"/var/lib/proot-distro/installed-rootfs/debian/home/*)
 
 proot-distro login debian --user "$PROOT_USER" --shared-tmp \
@@ -680,7 +679,6 @@ proot-distro login debian --user "$PROOT_USER" --shared-tmp \
         PATH="$PREFIX/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         startlxqt &>/dev/null &
 
-# Keeps the wake lock held until the LXQt session exits
 wait
 EOF
     chmod +x "$PREFIX/bin/start"
@@ -714,9 +712,6 @@ install_utilities() {
     local ai_dir="$HOME/.config/App-Installer"
 
     if [[ ! -d "$ai_dir" ]]; then
-        # git now lives inside the proot (install_proot), not natively in
-        # Termux. $HOME is bind-mounted into the proot at the same path,
-        # so the clone still lands exactly where it always did.
         proot-distro login debian --user "$username" --shared-tmp -b "$HOME:$HOME" -- \
             env HOME="$HOME" git clone https://github.com/phoenixbyrd/App-Installer.git "$ai_dir" \
             || die "Failed to clone App-Installer"
@@ -765,41 +760,61 @@ install_proot() {
     local rootfs="$PREFIX/var/lib/proot-distro/installed-rootfs/debian"
     local home="$rootfs/home/$username"
 
-    if [[ ! -d "$rootfs" ]]; then
-        print_status info "Installing Debian proot..."
-        proot-distro install debian
-    else
+    # Directory check alone isn't reliable: a prior interrupted/failed run
+    # can leave the container registered in proot-distro's own state even
+    # when the rootfs directory looks incomplete to us, which makes a plain
+    # `proot-distro install debian` fail with "container already exists".
+    # `proot-distro list` is the authoritative source, so check that first.
+    if [[ -d "$rootfs" ]] || proot-distro list 2>/dev/null | grep -qiE '\bdebian\b'; then
         print_status ok "Debian proot already installed"
+    else
+        print_status info "Installing Debian proot..."
+        if ! proot-distro install debian; then
+            # If it turns out to exist after all (race with the registry,
+            # or an error message rather than a real failure), keep going
+            # instead of aborting the whole install.
+            if [[ -d "$rootfs" ]] || proot-distro list 2>/dev/null | grep -qiE '\bdebian\b'; then
+                print_status warn "proot-distro reported an issue but the container is present — continuing"
+            else
+                die "Failed to install Debian proot — see $LOG_FILE"
+            fi
+        fi
     fi
 
-    # pd_run / pd_run_as are defined globally, above main()
-
     pd_run apt-get update -qq
-    pd_run apt-get upgrade -y -qq
-    # firefox-esr, not "firefox" — plain Mozilla firefox isn't in Debian's own repos.
-    # tmux, curl, wget, git, eza, and bat (the "batcat" binary on Debian, due
-    # to a package-name clash) live here rather than in Termux: this proot is
-    # a full, standard Debian userland, so general-purpose CLI tools are more
-    # compatible and stable installed here than layered onto Termux itself.
-    # git is used below by install_utilities; wget is used a few lines down
-    # to fetch the mesa .deb from inside the proot itself.
-    #
-    # openssh-server moves SSH access here too (see install_ssh) — landing
-    # in the same environment as the desktop and dev tools on connect is
-    # more useful than a bare Termux shell, and SSH has no Android-specific
-    # dependency that would keep it pinned to Termux.
-    #
-    # The LXQt desktop itself (lxqt/openbox/qterminal/pcmanfm-qt/...) is
-    # installed here too and is what the `start` script actually launches —
-    # Termux only supplies the X server, GPU relay, and audio underneath it.
-    # qt5-gtk-platformtheme bridges Qt apps to the GTK theme, same role
-    # qt5-qtbase-gtk-platformtheme played when LXQt ran natively.
-    pd_run apt-get install -y sudo onboard conky-all flameshot firefox-esr \
+    # Only upgrade if there's actually something pending — on a freshly
+    # bootstrapped proot there rarely is, and this check is much cheaper
+    # than a full upgrade pass.
+    if [[ "$(pd_run apt-get -s upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
+        pd_run apt-get upgrade -y -qq
+    else
+        print_status ok "Proot packages already current"
+    fi
+    # RUNLEVEL=1 tells maintainer scripts they're in a non-booted/chroot-like
+    # environment, so they skip hardware probing (udev/hwdb triggers trying
+    # to enumerate /sys/bus/usb, which doesn't exist in a proot and otherwise
+    # prints "No such file or directory" noise and can leave packages queued
+    # after the failing one un-configured).
+    pd_run env RUNLEVEL=1 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo onboard conky-all flameshot firefox-esr \
         tmux curl wget git gnupg eza bat fastfetch openssh-server procps \
         lxqt openbox qterminal pcmanfm-qt obconf-qt pavucontrol-qt \
         qt5-gtk-platformtheme libgl1-mesa-dri mesa-utils \
         papirus-icon-theme fonts-noto-color-emoji \
         -o Dpkg::Options::="--force-confold"
+
+    # Belt-and-braces: if any package's postinst/trigger failed partway
+    # through (e.g. the udisks2 USB-scan noise above), this finishes
+    # configuring whatever was left half-installed instead of silently
+    # leaving files like /etc/sudoers missing.
+    pd_run dpkg --configure -a 2>>"$LOG_FILE" || true
+
+    # sudo's postinst is what creates /etc/sudoers. If it's still missing
+    # after the above, force a reinstall rather than dying on a blind chmod.
+    if [[ ! -f "$rootfs/etc/sudoers" ]]; then
+        print_status warn "/etc/sudoers missing after install — reinstalling sudo"
+        pd_run env RUNLEVEL=1 apt-get install -y --reinstall sudo \
+            || die "Failed to install sudo (sudoers file still missing) — see $LOG_FILE"
+    fi
 
     if [[ ! -d "$home" ]]; then
         pd_run groupadd -f storage
@@ -811,6 +826,7 @@ install_proot() {
     fi
 
     local sudoers="$rootfs/etc/sudoers"
+    [[ -f "$sudoers" ]] || die "sudo package not properly installed ($sudoers missing) — check $LOG_FILE"
     if ! grep -q "^$username " "$sudoers" 2>/dev/null; then
         chmod u+rw "$sudoers"
         echo "$username ALL=(ALL) NOPASSWD:ALL" >> "$sudoers"
@@ -818,8 +834,6 @@ install_proot() {
         print_status ok "Sudo configured"
     fi
 
-    # uv (the Python package/venv manager) isn't in Debian's repos, so it's
-    # installed per-user via the official installer rather than apt.
     if [[ -x "$home/.local/bin/uv" ]]; then
         print_status ok "uv already installed in proot"
     else
@@ -842,12 +856,8 @@ export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 export PATH="$HOME/.local/bin:$PATH"
 
-# Only used by bashconfig/ohmybash below; nano ships with the base Debian
-# proot image. Uses :- so it doesn't override an EDITOR the user already set.
 export EDITOR="${EDITOR:-nano}"
 
-# Interactive-shell only, so it doesn't fire for non-interactive/scripted
-# logins (e.g. the sshd autostart line above).
 case $- in
     *i*)
         ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -867,9 +877,6 @@ alias troot='cd /data/data/com.termux/files/home'
 BASHRC
     fi
 
-    # Oh My Bash — cloned directly rather than run through its installer,
-    # since the installer overwrites ~/.bashrc with its own template and
-    # would clobber the custom config already written above.
     local omb_dir="$home/.oh-my-bash"
     if [[ ! -d "$omb_dir" ]]; then
         print_status info "Installing Oh My Bash..."
@@ -915,9 +922,6 @@ BASHRC
         print_status ok "Timezone set to $tz"
     fi
 
-    # mesa-vulkan-kgsl targets an old Debian snapshot and needs libllvm15,
-    # which current repos don't carry — pin a snapshot repo to resolve it,
-    # then force-install the .deb. Failure here is non-fatal.
     local mesa_deb="mesa-vulkan-kgsl_24.1.0-devel-20240120_arm64.deb"
     if pd_run dpkg -s mesa-vulkan-kgsl 2>/dev/null | grep -q "^Status:.*installed"; then
         print_status ok "Mesa Vulkan KGSL already installed"
@@ -967,10 +971,6 @@ BASHRC
         print_status ok "Conky config installed"
     fi
 
-    # $HOME/.config/autostart is read by the LXQt session, which now runs
-    # inside this same proot — so these run conky/flameshot directly rather
-    # than through the prun wrapper (that wrapper is for reaching Debian
-    # from *outside* the proot, which no longer applies here).
     local conky_src="$rootfs/usr/share/applications/conky.desktop"
     if [[ -f "$conky_src" ]]; then
         cp "$conky_src" "$HOME/.config/autostart/"
@@ -1003,13 +1003,6 @@ install_ssh() {
     local username=$1
     local sshd_config="$PREFIX/var/lib/proot-distro/installed-rootfs/debian/etc/ssh/sshd_config"
 
-    # openssh-server was installed as part of install_proot's apt pass.
-    # sshd runs as root inside the proot (pd_run, no --user) since it needs
-    # to bind the socket and drop privileges per connection; regular users
-    # get in over SSH the normal way, via their own password below.
-    # Port stays 8022, same as the native Termux setup did — proot doesn't
-    # grant real CAP_NET_BIND_SERVICE, so ports <1024 aren't bindable here
-    # either, root-inside-proot or not.
     pd_run ssh-keygen -A
 
     if grep -q "^Port " "$sshd_config" 2>/dev/null; then
@@ -1027,10 +1020,6 @@ install_ssh() {
         print_status ok "sshd already running"
     fi
 
-    # Auto-start sshd in future proot logins, plus start-sshd/stop-sshd
-    # toggle aliases — kept inside the Debian proot's own bashrc (via sudo,
-    # since the proot user has NOPASSWD sudo configured in install_proot)
-    # rather than Termux's, since Termux carries no shell config of its own.
     local home="$PREFIX/var/lib/proot-distro/installed-rootfs/debian/home/$username"
     if ! grep -q "pgrep -x sshd" "$home/.bashrc" 2>/dev/null; then
         cat >> "$home/.bashrc" <<'BASHRC'
@@ -1102,14 +1091,10 @@ main() {
 
     install_proot "$username"
 
-    # Runs after install_proot: it clones App-Installer using the proot's
-    # own git rather than a native Termux one.
     install_utilities "$username"
 
     install_ssh "$username"
 
-    # Report duration of the final step, matching the pattern print_step uses
-    # for every step before it
     print_status ok "Done in $(format_duration $(( $(date +%s) - STEP_START )))"
 
     termux-reload-settings
