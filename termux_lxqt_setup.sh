@@ -816,13 +816,14 @@ install_proot() {
             || die "sudo package installed but binary still not found — see $LOG_FILE"
     fi
 
-    if [[ ! -d "$home" ]]; then
-        pd_run groupadd -f storage
-        pd_run groupadd -f wheel
-        pd_run useradd -m -g users -G wheel,audio,video,storage -s /bin/bash "$username"
-        print_status ok "Proot user '$username' created"
-    else
+    pd_run groupadd -f storage
+    pd_run groupadd -f wheel
+    if pd_run id "$username" >/dev/null 2>&1; then
         print_status ok "Proot user '$username' already exists"
+    else
+        pd_run useradd -m -g users -G wheel,audio,video,storage -s /bin/bash "$username" \
+            || die "Failed to create proot user '$username' — see $LOG_FILE"
+        print_status ok "Proot user '$username' created"
     fi
 
     local sudoers="$rootfs/etc/sudoers"
